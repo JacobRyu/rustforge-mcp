@@ -1,0 +1,12 @@
+[package]
+name = "rustforge-mcp"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+rmcp = { version = "1.6.0", features = ["server", "transport-io"] }
+tokio = { version = "1.43", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+schemars = "0.8"
+anyhow = "1.0"
