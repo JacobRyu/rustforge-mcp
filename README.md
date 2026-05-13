@@ -9,6 +9,9 @@ An MCP (Model Context Protocol) server for Rust development.
 - **File Management**: List files, read content, and write to files.
 - **Cargo Integration**: Run `cargo check`, `cargo test`, `cargo clippy`, `cargo add`, and raw `cargo` commands.
 - **Connectivity**: Simple `ping` tool to check server status.
+- **Management API**: Register and manage MCP/LLM endpoints via HTTP API.
+- **Routing Engine**: Selects endpoints using health + weight + latency-aware scoring.
+- **Health Monitoring**: Periodic endpoint health checks and Prometheus metrics exposure.
 
 ## Prerequisites
 
@@ -24,6 +27,20 @@ cargo install --path .
 ```
 
 Or run it directly using `cargo run`.
+
+### Required environment variables
+
+```bash
+export MANAGEMENT_API_TOKEN="your-secure-token"
+export DATABASE_URL="postgres://user:password@localhost:5432/rustforge"
+```
+
+Optional:
+
+```bash
+export BIND_ADDR="0.0.0.0:3000"
+export USE_INMEMORY_STORAGE="false"
+```
 
 ## Usage
 
