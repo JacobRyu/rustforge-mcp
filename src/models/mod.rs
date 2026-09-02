@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -65,5 +65,14 @@ impl From<&ServerEndpoint> for ServerView {
 pub struct RoutingDecision {
     pub selected_server_id: Uuid,
     pub reason: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditLog {
+    pub id: Uuid,
+    pub action: String,
+    pub user_id: Option<String>,
+    pub details: String,
     pub timestamp: DateTime<Utc>,
 }

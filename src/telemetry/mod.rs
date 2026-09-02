@@ -1,13 +1,13 @@
-use crate::storage::Storage;
 use crate::models::HealthState;
-use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use crate::storage::Storage;
 use chrono::Utc;
-use std::time::Instant;
 use reqwest::Client;
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::time::{Duration, sleep};
 
-use prometheus::{Registry, Counter, register_counter_with_registry, Encoder, TextEncoder};
 use once_cell::sync::Lazy;
+use prometheus::{Counter, Encoder, Registry, TextEncoder, register_counter_with_registry};
 
 pub static REGISTRY: Lazy<Registry> = Lazy::new(Registry::new);
 pub static ROUTING_REQUESTS: Lazy<Counter> = Lazy::new(|| {
@@ -15,14 +15,16 @@ pub static ROUTING_REQUESTS: Lazy<Counter> = Lazy::new(|| {
         "routing_requests_total",
         "Total number of routing requests",
         *REGISTRY
-    ).unwrap()
+    )
+    .unwrap()
 });
 pub static HEALTH_CHECK_FAILURE: Lazy<Counter> = Lazy::new(|| {
     register_counter_with_registry!(
         "health_check_failures_total",
         "Total number of health check failures",
         *REGISTRY
-    ).unwrap()
+    )
+    .unwrap()
 });
 
 pub fn metrics_handler() -> String {
@@ -63,6 +65,20 @@ pub async fn health_check_worker(storage: Arc<dyn Storage>) {
                 if let Some(latency) = latency_ms {
                     metadata.insert("last_latency_ms".to_string(), serde_json::json!(latency));
                 }
+                // サーキットブレーカー用の連続失敗カウンタ更新
+                let failures =
+                    metadata.get(crate::router::FAILURES_KEY).and_then(|v| v.as_u64()).unwrap_or(0);
+                let next_failures = match new_health {
+                    HealthState::Healthy => 0,
+                    HealthState::Degraded | HealthState::Unhealthy => failures + 1,
+                    HealthState::Unknown => failures,
+                };
+                if next_failures != failures {
+                    metadata.insert(
+                        crate::router::FAILURES_KEY.to_string(),
+                        serde_json::json!(next_failures),
+                    );
+                }
                 should_write = true;
             }
 
@@ -94,8 +110,7 @@ async fn perform_health_check(
 ) -> (HealthState, Option<f64>) {
     tracing::debug!("Checking health for {} at {}", server.name, server.endpoint_url);
 
-    if !server.endpoint_url.starts_with("http://") && !server.endpoint_url.starts_with("https://")
-    {
+    if !server.endpoint_url.starts_with("http://") && !server.endpoint_url.starts_with("https://") {
         return (HealthState::Unknown, None);
     }
 

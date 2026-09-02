@@ -1,17 +1,35 @@
-use crate::models::{HealthState, ProviderKind, RoutingDecision, ServerEndpoint};
+use crate::models::{AuditLog, HealthState, ProviderKind, RoutingDecision, ServerEndpoint};
+use crate::security::Crypt;
 use crate::storage::Storage;
+use anyhow::{Result, anyhow};
+use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use async_trait::async_trait;
-use anyhow::{anyhow, Result};
 
 pub struct PostgresStorage {
     pool: PgPool,
+    crypt: Option<Crypt>,
 }
 
 impl PostgresStorage {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn with_crypt(pool: PgPool, crypt: Option<Crypt>) -> Self {
+        Self { pool, crypt }
+    }
+
+    fn encrypt_api_key(&self, api_key: &Option<String>) -> Result<Option<String>> {
+        match (api_key, &self.crypt) {
+            (None, _) => Ok(None),
+            (Some(_), None) => Ok(api_key.clone()),
+            (Some(key), Some(crypt)) => Ok(Some(crypt.encrypt(key)?)),
+        }
+    }
+
+    fn decrypt_api_key(&self, api_key: &Option<String>) -> Result<Option<String>> {
+        match (api_key, &self.crypt) {
+            (None, _) => Ok(None),
+            (Some(_), None) => Ok(api_key.clone()),
+            (Some(enc), Some(crypt)) => Ok(Some(crypt.decrypt(enc)?)),
+        }
     }
 }
 
@@ -60,12 +78,13 @@ impl Storage for PostgresStorage {
         .await?;
 
         if let Some(row) = row {
+            let api_key_enc: Option<String> = row.get("api_key");
             Ok(Some(ServerEndpoint {
                 id: row.get("id"),
                 name: row.get("name"),
                 kind: parse_provider_kind(row.get("kind"))?,
                 endpoint_url: row.get("endpoint_url"),
-                api_key: row.get("api_key"),
+                api_key: self.decrypt_api_key(&api_key_enc)?,
                 health: parse_health(row.get("health"))?,
                 weight: row.get::<i32, _>("weight") as u32,
                 metadata: row.get("metadata"),
@@ -86,12 +105,13 @@ impl Storage for PostgresStorage {
 
         let mut servers = Vec::new();
         for row in rows {
+            let api_key_enc: Option<String> = row.get("api_key");
             servers.push(ServerEndpoint {
                 id: row.get("id"),
                 name: row.get("name"),
                 kind: parse_provider_kind(row.get("kind"))?,
                 endpoint_url: row.get("endpoint_url"),
-                api_key: row.get("api_key"),
+                api_key: self.decrypt_api_key(&api_key_enc)?,
                 health: parse_health(row.get("health"))?,
                 weight: row.get::<i32, _>("weight") as u32,
                 metadata: row.get("metadata"),
@@ -115,7 +135,7 @@ impl Storage for PostgresStorage {
         .bind(server.name)
         .bind(provider_kind_as_str(&server.kind))
         .bind(server.endpoint_url)
-        .bind(server.api_key)
+        .bind(self.encrypt_api_key(&server.api_key)?)
         .bind(health_as_str(&server.health))
         .bind(server.weight as i32)
         .bind(server.metadata)
@@ -127,10 +147,7 @@ impl Storage for PostgresStorage {
     }
 
     async fn delete_server(&self, id: Uuid) -> anyhow::Result<()> {
-        sqlx::query("DELETE FROM servers WHERE id = $1")
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("DELETE FROM servers WHERE id = $1").bind(id).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -146,5 +163,42 @@ impl Storage for PostgresStorage {
         .await?;
 
         Ok(())
+    }
+
+    async fn record_audit_log(&self, log: AuditLog) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO audit_logs (id, action, user_id, details, timestamp) VALUES ($1, $2, $3, $4, $5)"
+        )
+        .bind(log.id)
+        .bind(log.action)
+        .bind(log.user_id)
+        .bind(log.details)
+        .bind(log.timestamp)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn list_audit_logs(&self, limit: Option<u32>) -> anyhow::Result<Vec<AuditLog>> {
+        let limit = limit.unwrap_or(100).max(1) as i64;
+        let rows = sqlx::query(
+            "SELECT id, action, user_id, details, timestamp FROM audit_logs ORDER BY timestamp DESC LIMIT $1"
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut logs = Vec::new();
+        for row in rows {
+            logs.push(AuditLog {
+                id: row.get("id"),
+                action: row.get("action"),
+                user_id: row.get("user_id"),
+                details: row.get("details"),
+                timestamp: row.get("timestamp"),
+            });
+        }
+        Ok(logs)
     }
 }
